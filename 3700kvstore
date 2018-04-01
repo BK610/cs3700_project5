@@ -28,9 +28,6 @@ class State:
 
 class Replica:
 
-	
-
-
 	def __init__(self):
 
 		self.term = 0
@@ -46,15 +43,55 @@ class Replica:
 		# state
 		# 		
 
-	def process_message(self, raw_msg, sock):
+	def process_message(self, msg):
 
-		if len(raw_msg) == 0: return
+		#if len(raw_msg) == 0: return
+
+		if msg['type'] in ['get', 'put']:
+
+			response = None
+			
+			if (self.leader == my_id):
+				#print("you have found the leader")	
+				if msg['type'] == 'get':
+					key = msg['key']
+
+					if key in self.data:
+						
+						#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'ok', 'MID': msg['MID'], 'value': replica.data[key]}
+						replica.send_client_message(msg['src'], 'ok', msg['MID'], replica.data[key])
+					else:
+						
+						#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'ok', 'MID': msg['MID'], 'value': ""}
+						replica.send_client_message(msg['src'], 'ok', msg['MID'], "")
+					
+					#sock.send(json.dumps(msg2))
+				else:
+					key = msg['key']
+					val = msg['value']
+		
+					replica.data[key] = val
+					
+					#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'ok', 'MID': msg['MID']}
+					
+					replica.send_client_message(msg['src'], 'ok', msg['MID'])
+
+					#sock.send(json.dumps(msg2))
 
 
+			elif (replica.leader == 'FFFF'):
 
-		msg = json.loads(msg_raw)
+                        	#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'fail', 'MID': msg['MID']}
+				self.send_client_message(msg['src'], 'fail', msg['MID'])
+				print("fail, try again")
+			else:
+				self.send_client_message(msg['src'], 'redirect', msg['MID'])
+				#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'redirect', 'MID': msg['MID']}
+				
+			#sock.send(json.dumps(response))
 
-		if (msg['type'] == 'voteRequest'):
+
+		elif (msg['type'] == 'voteRequest'):
 
 			potential_candidate = msg['src']	
 			candidate_term = msg['term']
@@ -69,9 +106,9 @@ class Replica:
 				sock.send(json.dumps(vote_msg))
 				self.term = candidate_term
 			
-	
-				self.timeStamp = time.time()
-				self.electionTimeout = rand_election_timeout()
+				self.reset_clock()
+				#self.timeStamp = time.time()
+				#self.electionTimeout = rand_election_timeout()
 
 
 		elif (msg['type'] == 'vote'):
@@ -94,9 +131,9 @@ class Replica:
 		elif (msg['type'] == 'heartbeat'):
 		
 			#print(my_id + " recieved heart beat from " + msg['src'])
-	
-			self.timeStamp = time.time()
-			self.electionTimeout = rand_election_timeout()				
+			self.reset_clock()
+			#self.timeStamp = time.time()
+			#self.electionTimeout = rand_election_timeout()				
 
 			self.leader = msg['src']
 			self.state = State.FOLLOWER
@@ -125,7 +162,7 @@ class Replica:
 	def follower_process(self, msg):
 		pass
 
-	def time_handle(self, sock):
+	def time_handle(self):
 
 		#global HEARTBEAT_TIMEOUT
 
@@ -145,8 +182,9 @@ class Replica:
 		elif clock > self.timeStamp + self.electionTimeout:
 			#print(str(clock) + " vs " + str(self.timeStamp + self.electionTimeout))
 			print(my_id + " timed out!")
-			self.timeStamp = clock
-			self.electionTimeout = rand_election_timeout()
+			self.reset_clock()
+			#self.timeStamp = clock
+			#self.electionTimeout = rand_election_timeout()
 			
 			if self.state == State.FOLLOWER:
 				self.state == State.CANDIDATE
@@ -160,7 +198,20 @@ class Replica:
 				for repID in replica_ids:
 					msg = {'src': my_id, 'dst': repID, 'leader': replica.leader, 'type': 'voteRequest', "term": self.term}
 					sock.send(json.dumps(msg))
-				
+	
+	def reset_clock(self):
+		self.timeStamp = time.time()
+		self.electionTimeout = rand_election_timeout()	
+
+
+	def send_client_message(self, dst, typee, mid, value = None):
+
+		if value is not None:
+			msg = {'src': my_id, 'dst': dst, 'leader': self.leader,'type': typee, 'MID': mid, 'value': value}
+			sock.send(json.dumps(msg))
+		else:
+			msg = {'src': my_id, 'dst': dst, 'leader': self.leader, 'type': typee, 'MID': mid}
+			sock.send(json.dumps(msg))
 
 
 
@@ -182,60 +233,14 @@ while True:
 		if len(msg_raw) == 0: continue
 		msg = json.loads(msg_raw)
 		
-		# For now, ignore get() and put() from clients
-		if msg['type'] in ['get', 'put']:
-
-			response = None
-			
-			if (replica.leader == my_id):
-				#print("you have found the leader")	
-				if msg['type'] == 'get':
-					key = msg['key']
-
-					if key in replica.data:
-						response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'ok', 'MID': msg['MID'], 'value': replica.data[key]}
-					else:
-						
-						response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'ok', 'MID': msg['MID'], 'value': ""}
-					#print(isinstance(msg2, dict))
-					#sock.send(json.dumps(msg2))
-				else:
-					key = msg['key']
-					val = msg['value']
-		
-					replica.data[key] = val
-					
-					response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'ok', 'MID': msg['MID']}
-					#print(isinstance(msg2, dict))
-					#sock.send(json.dumps(msg2))
-
-
-			elif (replica.leader == 'FFFF'):
-
-                        	response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'fail', 'MID': msg['MID']}
-				print("fail, try again")
-			else:
-
-				response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'redirect', 'MID': msg['MID']}
-
-			sock.send(json.dumps(response))
-			
-			#pass
 		
 		# Handle noop messages. This may be removed from your final implementation
-		else:
-			replica.process_message(msg_raw, sock)
-			#print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
+		replica.process_message(msg)
+		#print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
 		
 	clock = time.time()
-	#print(clock)
-	
-	#if clock > replica.timeStamp + replica.electionTimeout:
-	#	print("timeout!")
-	#	replica.timeStamp = clock
-	#	replica.electionTimeout = rand_election_timeout()
 
-	replica.time_handle(sock)
+	replica.time_handle()
 
 	if clock-last > 2:
 		# Send a no-op message to a random peer every two seconds, just for fun
