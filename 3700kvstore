@@ -1,35 +1,45 @@
 #!/usr/bin/env python
+import sys
+import socket
+import select
+import time
+import json
+import random
 
-import sys, socket, select, time, json, random
-
-# Your ID number
-my_id = sys.argv[1]
-
-# The ID numbers of all the other replicas
-replica_ids = sys.argv[2:]
-
-# Connect to the network. All messages to/from other replicas and clients will
-# occur over this socket
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-sock.connect(my_id)
-
-last = 0
-
-TOTAL_REPLICAS = len(replica_ids) + 1
-HEARTBEAT_TIMEOUT = 0.1
-
-#election_timeout = time.time() + gen_election_timeout()
 
 class State:
+        '''
+        Represents an enumeration for the possible states of a replica.
+        '''
 	FOLLOWER = 0
 	CANDIDATE = 1
 	LEADER = 2
 
-
 class Replica:
-
-	def __init__(self):
-
+        '''
+        Represents a replica within a distributed system.
+        Fields:
+        id - String, ID of this Replica
+        replica_ids - [String], IDs of all connected replicas
+        term - Number, Current election term
+        votedFor - Replica, Who this Replica voted for. Only used during an
+            election
+        voteCount - Number, How many election votes this Replica received. Only
+            used during an election
+        log - [String], List of all log entries
+        state - State, Current state. One of [Follower, Candidate, Leader]
+        timeStamp - Double, Used to keep track of the last time that this
+            Replica sent a message (Leader, Candidate) or received a message
+            (Follower)
+        electionTimeout - Double, Random millisecond value between 150 and 300,
+            used to calculate timeouts during election
+        heartbeatTimeout - Double, Timeout value to trigger sending heartbeats
+        leader - String, 4-character hexadecimal ID for the identified leader
+        data - {Key: Value}, Dictionary to store key-value pairs
+        '''
+	def __init__(self, id, replica_ids):
+                self.id = id
+                self.replica_ids = replica_ids
 		self.term = 0
 		self.votedFor = None
 		self.voteCount = -1
@@ -37,114 +47,35 @@ class Replica:
 		self.state = State.FOLLOWER
 		self.timeStamp = time.time()
 		self.electionTimeout = rand_election_timeout()
+                self.heartbeatTimeout = 0.1
 		self.leader = 'FFFF'
 		self.data = {}
 
-		# state
-		# 		
+                # Connect to the network. All messages to/from other replicas and clients will
+                # occur over this socket
+                self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) 
+                self.sock.connect(self.id)
 
 	def process_message(self, msg):
-
-		#if len(raw_msg) == 0: return
-
+                '''
+                Process a message received by this Replica. Determines the type
+                    of message and redirects to the correct method.
+                Arguments:
+                msg - String, received message from a client
+                '''
 		if msg['type'] in ['get', 'put']:
-
-			response = None
-			
-			if (self.leader == my_id):
-				#print("you have found the leader")	
-				if msg['type'] == 'get':
-					key = msg['key']
-
-					if key in self.data:
-						
-						#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'ok', 'MID': msg['MID'], 'value': replica.data[key]}
-						replica.send_client_message(msg['src'], 'ok', msg['MID'], replica.data[key])
-					else:
-						
-						#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'ok', 'MID': msg['MID'], 'value': ""}
-						replica.send_client_message(msg['src'], 'ok', msg['MID'], "")
-					
-					#sock.send(json.dumps(msg2))
-				else:
-					key = msg['key']
-					val = msg['value']
-		
-					replica.data[key] = val
-					
-					#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'ok', 'MID': msg['MID']}
-					
-					replica.send_client_message(msg['src'], 'ok', msg['MID'])
-
-					#sock.send(json.dumps(msg2))
-
-
-			elif (replica.leader == 'FFFF'):
-
-                        	#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'fail', 'MID': msg['MID']}
-				self.send_client_message(msg['src'], 'fail', msg['MID'])
-				print("fail, try again")
-			else:
-				self.send_client_message(msg['src'], 'redirect', msg['MID'])
-				#response = {'src': my_id, 'dst': msg['src'], 'leader': replica.leader, 'type': 'redirect', 'MID': msg['MID']}
-				
-			#sock.send(json.dumps(response))
-
+                        self.handle_get_put(msg)
 
 		elif (msg['type'] == 'voteRequest'):
-
-			potential_candidate = msg['src']	
-			candidate_term = msg['term']
-
-			print("I am " + my_id + " and I recieved a vote request from " + potential_candidate)
-			
-
-			if candidate_term > self.term:
-				self.state = State.FOLLOWER
-				self.votedFor = potential_candidate
-				vote_msg = {'src': my_id, 'dst': potential_candidate, 'leader': self.leader, 'type': 'vote'}
-				sock.send(json.dumps(vote_msg))
-				self.term = candidate_term
-			
-				self.reset_clock()
-				#self.timeStamp = time.time()
-				#self.electionTimeout = rand_election_timeout()
-
+                        self.handle_vote_request(msg)
 
 		elif (msg['type'] == 'vote'):
-			
-			print("I am " + my_id + " and " + msg['src'] + " voted for me!")
-			self.voteCount += 1
-
-			if (self.voteCount > TOTAL_REPLICAS / 2 + 1):
-				print(my_id + "wins!")
-				self.state = State.LEADER
-				self.voteCount = -1
-				self.votedFor = None
-				self.leader = my_id
-				for repID in replica_ids:
-					msg = {'src': my_id, 'dst': repID, 'leader': self.leader, 'type': 'heartbeat', 'term': self.term}
-					sock.send(json.dumps(msg))
-				self.timeStamp = time.time()
-					
+                        self.handle_vote(msg)
 
 		elif (msg['type'] == 'heartbeat'):
-		
-			#print(my_id + " recieved heart beat from " + msg['src'])
-			self.reset_clock()
-			#self.timeStamp = time.time()
-			#self.electionTimeout = rand_election_timeout()				
-
-			self.leader = msg['src']
-			self.state = State.FOLLOWER
-			self.voteCount = -1
-			self.votedFor = None
+		        self.handle_heartbeat(msg)
 			
-			
-
-
-
-
+                # TODO: are any of these valid anymore? tbd
 		if self.state == State.LEADER:
 			self.leader_process(msg)
 		elif self.state == State.CANDIDATE:
@@ -152,6 +83,101 @@ class Replica:
 		else:
 			self.follower_process(msg)
 
+        def handle_get_put(self, msg):
+                '''
+                Handle GET and PUT messages
+                Arguments:
+                msg - String, received GET or PUT message
+                '''
+                # If the leader, actually handle
+                if (self.leader == self.id):
+                        #print("you have found the leader")	
+
+                        if msg['type'] == 'get':
+                                key = msg['key']
+
+                                if key in self.data:
+                                        self.send_client_message(msg['src'], 'ok', msg['MID'], self.data[key])
+                                # Respond with ok + empty string if we don't have the Key Value pair
+                                else:
+                                        self.send_client_message(msg['src'], 'ok', msg['MID'], "")
+
+                        else:
+                                key = msg['key']
+                                val = msg['value']
+        
+                                self.data[key] = val
+
+                                self.send_client_message(msg['src'], 'ok', msg['MID'])
+
+                # Don't know who the leader is, fail
+                elif (self.leader == 'FFFF'):
+                        self.send_client_message(msg['src'], 'fail', msg['MID'])
+                        print("fail, try again")
+
+                # Know who the leader is, redirect to them
+                else:
+                        self.send_client_message(msg['src'], 'redirect', msg['MID'])
+
+        def handle_vote_request(self, msg):
+                '''
+                Handle vote request messages.
+                Arguments:
+                msg - String, received vote request message
+                '''
+                potential_candidate = msg['src']	
+                candidate_term = msg['term']
+
+                print("I am " + self.id + " and I recieved a vote request from " + potential_candidate)
+
+                if candidate_term > self.term:
+                        self.state = State.FOLLOWER
+                        self.votedFor = potential_candidate
+                        vote_msg = {'src': self.id, 'dst': potential_candidate, 'leader': self.leader, 'type': 'vote'}
+                        self.sock.send(json.dumps(vote_msg))
+                        self.term = candidate_term
+                
+                        self.reset_clock()
+                        #self.timeStamp = time.time()
+                        #self.electionTimeout = rand_election_timeout()
+
+        def handle_vote(self, msg):
+                '''
+                Handle vote messages.
+                Arguments:
+                msg - String, received vote message
+                '''
+                print("I am " + self.id + " and " + msg['src'] + " voted for me!")
+                self.voteCount += 1
+
+                total_replicas = len(self.replica_ids) + 1
+
+                if (self.voteCount > total_replicas / 2 + 1):
+                        print(self.id + "wins!")
+                        self.state = State.LEADER
+                        self.voteCount = -1
+                        self.votedFor = None
+                        self.leader = self.id
+                        for repID in self.replica_ids:
+                                msg = {'src': self.id, 'dst': repID, 'leader': self.leader, 'type': 'heartbeat', 'term': self.term}
+                                self.sock.send(json.dumps(msg))
+                        self.timeStamp = time.time()
+
+        def handle_heartbeat(self, msg):
+                '''
+                Handle heartbeat messages.
+                Arguments:
+                msg - String, received heartbeat message
+                '''
+                #print(self.id + " recieved heart beat from " + msg['src'])
+                self.reset_clock()
+                #self.timeStamp = time.time()
+                #self.electionTimeout = rand_election_timeout()				
+
+                self.leader = msg['src']
+                self.state = State.FOLLOWER
+                self.voteCount = -1
+                self.votedFor = None
 
 	def leader_process(self, msg):
 		pass
@@ -163,25 +189,23 @@ class Replica:
 		pass
 
 	def time_handle(self):
-
-		#global HEARTBEAT_TIMEOUT
-
+                '''
+                Handles all time-dependent activity for this Replica.
+                AKA Sending periodic messages and timing out.
+                '''
 		clock = time.time()
 
 		#print(str(clock) + " vs " + str(self.timeStamp + self.electionTimeout))
 
-
 		if self.state == State.LEADER:
-			if clock > self.timeStamp + HEARTBEAT_TIMEOUT:
-				for repID in replica_ids:
-					msg = {'src': my_id, 'dst': repID, 'leader': my_id, 'type': 'heartbeat', 'term': self.term}
-					sock.send(json.dumps(msg))
-
-
+			if clock > self.timeStamp + self.heartbeatTimeout:
+				for repID in self.replica_ids:
+					msg = {'src': self.id, 'dst': repID, 'leader': self.id, 'type': 'heartbeat', 'term': self.term}
+					self.sock.send(json.dumps(msg))
 
 		elif clock > self.timeStamp + self.electionTimeout:
 			#print(str(clock) + " vs " + str(self.timeStamp + self.electionTimeout))
-			print(my_id + " timed out!")
+			print(self.id + " timed out!")
 			self.reset_clock()
 			#self.timeStamp = clock
 			#self.electionTimeout = rand_election_timeout()
@@ -191,61 +215,79 @@ class Replica:
 				self.term += 1
 
 				if self.votedFor is None:
-					self.votedFor = my_id
+					self.votedFor = self.id
 					self.voteCount = 1
 				
 				# send vote requests				
-				for repID in replica_ids:
-					msg = {'src': my_id, 'dst': repID, 'leader': replica.leader, 'type': 'voteRequest', "term": self.term}
-					sock.send(json.dumps(msg))
+				for repID in self.replica_ids:
+					msg = {'src': self.id, 'dst': repID, 'leader': self.leader, 'type': 'voteRequest', "term": self.term}
+					self.sock.send(json.dumps(msg))
 	
 	def reset_clock(self):
+                '''
+                Reset this Replica's timeStamp and electionTimeout fields
+                '''
 		self.timeStamp = time.time()
 		self.electionTimeout = rand_election_timeout()	
 
-
 	def send_client_message(self, dst, typee, mid, value = None):
-
+                '''
+                Send a message to the client using the values input as arguments
+                Arguments:
+                dst - String, message destination, pulled from previous message
+                type - String, message type
+                mid - String, message MID, pulled from previous message
+                value - String, message Value. Defaults to None for messages
+                    that do not contain a Value to be sent
+                '''
 		if value is not None:
-			msg = {'src': my_id, 'dst': dst, 'leader': self.leader,'type': typee, 'MID': mid, 'value': value}
-			sock.send(json.dumps(msg))
+			msg = {'src': self.id, 'dst': dst, 'leader': self.leader,'type': typee, 'MID': mid, 'value': value}
+			self.sock.send(json.dumps(msg))
 		else:
-			msg = {'src': my_id, 'dst': dst, 'leader': self.leader, 'type': typee, 'MID': mid}
-			sock.send(json.dumps(msg))
-
-
-
+			msg = {'src': self.id, 'dst': dst, 'leader': self.leader, 'type': typee, 'MID': mid}
+			self.sock.send(json.dumps(msg))
 
 def rand_election_timeout():
 	return random.randint(150, 300) / 1000.0
 
+def main(argvs):
+        # Your ID number
+        my_id = sys.argv[1]
 
-replica = Replica()
+        # The ID numbers of all the other replicas
+        replica_ids = sys.argv[2:]
 
-print("my id is " + my_id + "and my timeout is " + str(replica.electionTimeout))
+        last = 0
 
-while True:
-	ready = select.select([sock], [], [], 0.1)[0]
-	
-	if sock in ready:
-		msg_raw = sock.recv(32768)
-		
-		if len(msg_raw) == 0: continue
-		msg = json.loads(msg_raw)
-		
-		
-		# Handle noop messages. This may be removed from your final implementation
-		replica.process_message(msg)
-		#print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
-		
-	clock = time.time()
+        replica = Replica(my_id, replica_ids)
 
-	replica.time_handle()
+        print("my id is " + replica.id + "and my timeout is " + str(replica.electionTimeout))
 
-	if clock-last > 2:
-		# Send a no-op message to a random peer every two seconds, just for fun
-		# You definitely want to remove this from your implementation
-		msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'type': 'noop'}
-		sock.send(json.dumps(msg))
-		#print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
-		last = clock
+        while True:
+            ready = select.select([replica.sock], [], [], 0.1)[0]
+            
+            if replica.sock in ready:
+                    msg_raw = replica.sock.recv(32768)
+                    # print("Message received: " + msg_raw)
+                    if len(msg_raw) == 0: continue
+                    msg = json.loads(msg_raw)
+                    
+                    
+                    # Handle noop messages. This may be removed from your final implementation
+                    replica.process_message(msg)
+                    #print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
+                    
+            clock = time.time()
+
+            replica.time_handle()
+
+            if clock - last > 2:
+                    # Send a no-op message to a random peer every two seconds, just for fun
+                    # You definitely want to remove this from your implementation
+                    msg = {'src': replica.id, 'dst': random.choice(replica.replica_ids), 'leader': 'FFFF', 'type': 'noop'}
+                    replica.sock.send(json.dumps(msg))
+                    #print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
+                    last = clock
+
+if __name__ == "__main__":
+        main(sys.argv)
