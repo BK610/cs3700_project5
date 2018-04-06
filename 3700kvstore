@@ -51,6 +51,10 @@ class Replica:
 		self.leader = 'FFFF'
 		self.data = {}
 
+
+		self.commitIndex = -1
+		#self.lastApplied = -1
+
                 # Connect to the network. All messages to/from other replicas and clients will
                 # occur over this socket
                 self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) 
@@ -92,6 +96,7 @@ class Replica:
                 # If the leader, actually handle
                 if (self.leader == self.id):
                         #print("you have found the leader")	
+			#self.log.append({"command": msg, "term": self.term})
 
                         if msg['type'] == 'get':
                                 key = msg['key']
@@ -103,12 +108,17 @@ class Replica:
                                         self.send_client_message(msg['src'], 'ok', msg['MID'], "")
 
                         else:
+
+				self.log.append({"command": msg, "term": self.term})
+
                                 key = msg['key']
                                 val = msg['value']
         
                                 self.data[key] = val
 
                                 self.send_client_message(msg['src'], 'ok', msg['MID'])
+ 
+
 
                 # Don't know who the leader is, fail
                 elif (self.leader == 'FFFF'):
@@ -174,10 +184,28 @@ class Replica:
                 #self.timeStamp = time.time()
                 #self.electionTimeout = rand_election_timeout()				
 
-                self.leader = msg['src']
+                #self.leader = msg['src']
                 self.state = State.FOLLOWER
                 self.voteCount = -1
-                self.votedFor = None
+
+		leaderID = msg['leader']
+		leaderTerm = msg['term']
+		leaderLog = msg['log']
+		leaderCommitIndex = msg['commitIndex']		
+
+		success = True
+
+		if leaderTerm >= self.term:
+			pass			
+
+
+		else:
+			success = False
+
+		response = {'src': self.id, 'dst': leaderID, 'type': "heartbeatResponse", 'term': self.term, 'success': success}
+		self.sock.send(json.dumps(response))
+		
+                #self.votedFor = None
 
 	def leader_process(self, msg):
 		pass
@@ -200,7 +228,7 @@ class Replica:
 		if self.state == State.LEADER:
 			if clock > self.timeStamp + self.heartbeatTimeout:
 				for repID in self.replica_ids:
-					msg = {'src': self.id, 'dst': repID, 'leader': self.id, 'type': 'heartbeat', 'term': self.term}
+					msg = {'src': self.id, 'dst': repID, 'leader': self.id, 'type': 'heartbeat', 'term': self.term, "leaderCommit": len(self.log), "log": self.log}
 					self.sock.send(json.dumps(msg))
 
 		elif clock > self.timeStamp + self.electionTimeout:
@@ -281,13 +309,13 @@ def main(argvs):
 
             replica.time_handle()
 
-            if clock - last > 2:
+            #if clock - last > 2:
                     # Send a no-op message to a random peer every two seconds, just for fun
                     # You definitely want to remove this from your implementation
-                    msg = {'src': replica.id, 'dst': random.choice(replica.replica_ids), 'leader': 'FFFF', 'type': 'noop'}
-                    replica.sock.send(json.dumps(msg))
+                    #msg = {'src': replica.id, 'dst': random.choice(replica.replica_ids), 'leader': 'FFFF', 'type': 'noop'}
+                    #replica.sock.send(json.dumps(msg))
                     #print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
-                    last = clock
+                    #last = clock
 
 if __name__ == "__main__":
         main(sys.argv)
