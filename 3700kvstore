@@ -176,7 +176,7 @@ class Replica:
                         self.voteCount = -1
                         self.votedFor = None
                         self.leader = self.id
-                        self.send_heartbeat()
+                        self.send_heartbeats()
                         self.timeStamp = time.time()
 
         def handle_heartbeat(self, msg):
@@ -235,7 +235,7 @@ class Replica:
                 Arguments:
                 msg - String, received heartbeat response message
                 '''
-                # print("Received heartbeat response from " + msg['src'])
+                print("Received heartbeat response from " + msg['src'])
                 #if msg['term'] <= self.term:
                 #       pass 
 
@@ -255,8 +255,8 @@ class Replica:
 	def follower_process(self, msg):
 		pass
 
-        def send_heartbeat(self):
-                print("Sending heartbeats from " + self.id)
+        def send_heartbeats(self):
+                #print("Sending heartbeats from " + self.id)
                 for repID in self.replica_ids:
                         msg = {'src': self.id,
                             'dst': repID,
@@ -269,6 +269,7 @@ class Replica:
                             'prevLogIndex': 0,
                             'prevLogTerm': 0}
                         self.sock.send(json.dumps(msg))
+		self.timeStamp = time.time()
 
         def send_vote_requests(self):
                 for repID in self.replica_ids:
@@ -294,7 +295,7 @@ class Replica:
 		if self.state == State.LEADER:
 			if clock > self.timeStamp + self.heartbeatTimeout:
                                 # print("Sending heartbeat from " + self.id)
-                                self.send_heartbeat()
+                                self.send_heartbeats()
 
 		elif clock > self.timeStamp + self.electionTimeout:
 			#print(str(clock) + " vs " + str(self.timeStamp + self.electionTimeout))
@@ -363,7 +364,7 @@ def main(argvs):
                     # print("Message received: " + msg_raw)
                     if len(msg_raw) == 0: continue
                     msg = json.loads(msg_raw)
-                    print("Replica " + replica.id + " received message:\n" + msg_raw)
+                    # print("Replica " + replica.id + " received message:\n" + msg_raw)
 
                     # Handle noop messages. This may be removed from your final implementation
                     replica.process_message(msg)
