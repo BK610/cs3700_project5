@@ -203,7 +203,7 @@ class Replica:
 		leaderCommitIndex = msg['leaderCommit']
                 prevLogIndex = msg['prevLogIndex']
                 prevLogTerm = msg['prevLogTerm']
-                print(str(len(leaderEntries)) + " entries sent to " + self.id)
+                #print(str(len(leaderEntries)) + " entries sent to " + self.id)
 
                 # Handling the case where the log is empty
                 if prevLogIndex == -1:
@@ -223,7 +223,7 @@ class Replica:
                         self.reset_clock()
                         return
 
-                print("Trying to find self.log entry at " + str(prevLogIndex))
+                #print("Trying to find self.log entry at " + str(prevLogIndex))
                 entryAtPrevLogIndex = self.log[prevLogIndex]
                 leaderEntry = leaderEntries[0]
 
@@ -254,6 +254,7 @@ class Replica:
 
                 # Step 4
                 for entry in leaderEntries[1:]:
+                        print("Appending entry from " + self.leader + " to " + self.id)
                         self.log.append(entry)
                 #for entry_index in range(prevLogIndex + 1, len(leaderEntries)):
                         #self.log.append(leaderEntries[entry_index])
@@ -280,7 +281,7 @@ class Replica:
                 Arguments:
                 msg - String, received heartbeat response message
                 '''
-                print("Received heartbeat response from " + msg['src'])
+                #print("Received heartbeat response from " + msg['src'])
                 # if msg['term'] <= self.term:
                 #       pass 
 
@@ -290,8 +291,14 @@ class Replica:
                         #TODO: Bad things
                 #        pass
 
+                self.matchIndex[msg['src']] = msg['log_length'] - 1
                 self.nextIndex[msg['src']] = min(len(self.log), msg['log_length'])
 
+                quorum_list = self.matchIndex.values()
+                quorum_list.append(self.commitIndex)
+                quorum_list.sort()
+                self.commitIndex = quorum_list[2]
+                print("New commitIndex: " + str(self.commitIndex))
                 # Handle term stuf
                 # Handle failures
                 # Handle success
@@ -342,7 +349,8 @@ class Replica:
                         while self.commitIndex > self.lastApplied:
                                 print("CommitIndex > LastApplied for " + self.id)
                                 self.lastApplied += 1
-                                msg = self.log[self.lastApplied]
+                                msg = self.log[self.lastApplied]['command']
+                                #print(msg)
 
                                 key = msg['key']
                                 val = msg['value']
