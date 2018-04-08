@@ -38,6 +38,7 @@ class Replica:
         data - {Key: Value}, Dictionary to store key-value pairs
         '''
 	def __init__(self, id, replica_ids):
+                # Persistent state (on all servers)
                 self.id = id
                 self.replica_ids = replica_ids
 		self.term = 0
@@ -51,13 +52,22 @@ class Replica:
 		self.leader = 'FFFF'
 		self.data = {}
 
-                self.commitIndex = -1
-		#self.lastApplied = -1
-
                 # Connect to the network. All messages to/from other replicas and clients will
                 # occur over this socket
                 self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
                 self.sock.connect(self.id)
+
+                # Volatile state (on all servers)
+                self.commitIndex = -1
+		self.lastApplied = -1
+
+                # Volatile state (on leaders)
+                self.nextIndex = {}
+                self.matchIndex = {}
+
+                for repID in self.replica_ids:
+                    self.nextIndex[repID] = 0
+                    self.matchIndex[repID] = -1
 
 	def process_message(self, msg):
                 '''
@@ -81,14 +91,6 @@ class Replica:
                 elif msg['type'] == 'heartbeatResponse':
                         self.handle_heartbeat_response(msg)
 
-                # TODO: are any of these valid anymore? tbd
-		if self.state == State.LEADER:
-			self.leader_process(msg)
-		elif self.state == State.CANDIDATE:
-			self.candidate_process(msg)
-		else:
-			self.follower_process(msg)
-
         def handle_get_put(self, msg):
                 '''
                 Handle GET and PUT messages
@@ -110,7 +112,6 @@ class Replica:
                                         self.send_client_message(msg['src'], 'ok', msg['MID'], "")
 
                         else:
-
 				self.log.append({'command': msg, 'term': self.term})
 
                                 key = msg['key']
@@ -119,8 +120,6 @@ class Replica:
                                 self.data[key] = val
 
                                 self.send_client_message(msg['src'], 'ok', msg['MID'])
-
-
 
                 # Don't know who the leader is, fail
                 elif (self.leader == 'FFFF'):
@@ -150,7 +149,7 @@ class Replica:
                             'leader': self.leader,
                             'type': 'vote',
                             'term': self.term,
-                            'voteGranted': 'True'}
+                            'voteGranted': True}
 
                         self.sock.send(json.dumps(vote_msg))
                         self.term = candidate_term
@@ -197,36 +196,82 @@ class Replica:
                 '''
                 #print(self.id + " recieved heart beat from " + msg['src'])
                 #print("heartbeat: " + str(msg))
+		
+		leaderID = msg['src']
+		leaderTerm = msg['term']
+		leaderEntries = msg['entries']
+		leaderCommitIndex = msg['leaderCommit']
+                prevLogIndex = msg['prevLogIndex']
+                prevLogTerm = msg['prevLogTerm']
+                print(str(len(leaderEntries)) + " entries sent to " + self.id)
 
-                self.leader = msg['src']
+                # Handling the case where the log is empty
+                if prevLogIndex == -1:
+                        # Set state
+                        self.leader = leaderID
+                        self.state = State.FOLLOWER
+                        self.voteCount = -1
+                        self.votedFor = None
+
+                        for entry_index in range(prevLogIndex + 1, len(leaderEntries)):
+                                print("Adding entry " + str(entry_index) + " to " + self.id)
+                                self.log.append(leaderEntries[entry_index])
+
+                        response = {'src': self.id, 'dst': leaderID, 'leader': self.leader, 'type': "heartbeatResponse", 'term': self.term, 'success': True, 'log_length': len(self.log)}
+                        self.sock.send(json.dumps(response))
+
+                        self.reset_clock()
+                        return
+
+                print("Trying to find self.log entry at " + str(prevLogIndex))
+                entryAtPrevLogIndex = self.log[prevLogIndex]
+                leaderEntry = leaderEntries[0]
+
+                # Steps 1 and 2
+                if (leaderTerm < self.term
+                        or entryAtPrevLogIndex['term'] != leaderEntry['term']):
+                        # Send failure
+                        response = {'src': self.id, 'dst': leaderID, 'leader': self.leader, 'type': "heartbeatResponse", 'term': self.term, 'success': 'False'}
+                        self.sock.send(json.dumps(response))
+
+                        self.reset_clock()
+                        return
+
+                leaderIndex = 1
+
+                # Step 3
+                for entry_index in range(prevLogIndex + 1, len(self.log) - 1):
+                        entryAtPrevLogIndex = self.log[entry_index]
+                        leaderEntry = leaderEntries[leaderIndex]
+
+                        if (['term'] != leaderEntry['term']
+                                or entryAtPrevLogIndex['command'] != leaderEntry['command']):
+                                del self.log[prevLogIndex:]
+                                break
+
+                        prevLogIndex += 1
+                        leaderIndex += 1
+
+                # Step 4
+                for entry in leaderEntries[1:]:
+                        self.log.append(entry)
+                #for entry_index in range(prevLogIndex + 1, len(leaderEntries)):
+                        #self.log.append(leaderEntries[entry_index])
+
+                # Step 5
+                if leaderCommitIndex > self.commitIndex:
+                        self.commitIndex = min(leaderCommitIndex, len(self.log) - 1)
+
+                # Set state
+                self.leader = leaderID
                 self.state = State.FOLLOWER
                 self.voteCount = -1
                 self.votedFor = None
 
-		leaderID = msg['leader']
-		leaderTerm = msg['term']
-		leaderEntries = msg['entries']
-		leaderCommitIndex = msg['leaderCommit']
-
-		success = True
-
-		#if leaderTerm >= self.term:
-		#	pass
-                # pseudocode for step 2
-                # elif log[prevLogIndex].term == prevLogTerm:
-                        # pass
-		#else:
-		#	success = False
-
-                # pseudocode for step 3
-                #for entry in self.log:
-                        #if entry.index == 
-                        #entry.term != 
-
-	        response = {'src': self.id, 'dst': leaderID, 'leader': self.leader, 'type': "heartbeatResponse", 'term': self.term, 'success': success}
+                # Send success
+	        response = {'src': self.id, 'dst': leaderID, 'leader': self.leader, 'type': "heartbeatResponse", 'term': self.term, 'success': True, 'log_length': len(self.log)}
 		self.sock.send(json.dumps(response))
 
-                #self.votedFor = None
                 self.reset_clock()
 
         def handle_heartbeat_response(self, msg):
@@ -236,7 +281,7 @@ class Replica:
                 msg - String, received heartbeat response message
                 '''
                 print("Received heartbeat response from " + msg['src'])
-                #if msg['term'] <= self.term:
+                # if msg['term'] <= self.term:
                 #       pass 
 
                 # Later election term already happened, this replica should not
@@ -244,30 +289,29 @@ class Replica:
                 #else:
                         #TODO: Bad things
                 #        pass
-                pass
 
-	def leader_process(self, msg):
-		pass
+                self.nextIndex[msg['src']] = min(len(self.log), msg['log_length'])
 
-	def candidate_process(self, msg):
-		pass
-
-	def follower_process(self, msg):
-		pass
+                # Handle term stuf
+                # Handle failures
+                # Handle success
 
         def send_heartbeats(self):
                 #print("Sending heartbeats from " + self.id)
                 for repID in self.replica_ids:
+                        prevLogIndex = self.nextIndex[repID] - 1
+                        prevLogTerm = -1 if prevLogIndex == -1 else self.log[prevLogIndex]['term']
+
                         msg = {'src': self.id,
                             'dst': repID,
                             'leader': self.id,
                             'type': 'heartbeat',
                             'term': self.term,
                             # TODO: What are the actual values for these?
-                            'leaderCommit': len(self.log),
-                            'entries': [], # self.log,
-                            'prevLogIndex': 0,
-                            'prevLogTerm': 0}
+                            'leaderCommit': self.commitIndex,
+                            'entries': self.log[prevLogIndex:],
+                            'prevLogIndex': prevLogIndex,
+                            'prevLogTerm': prevLogTerm}
                         self.sock.send(json.dumps(msg))
 		self.timeStamp = time.time()
 
@@ -293,6 +337,21 @@ class Replica:
 		#print(str(clock) + " vs " + str(self.timeStamp + self.electionTimeout))
 
 		if self.state == State.LEADER:
+                        # Apply all unapplied log entries to self.data, and
+                        #   respond to client
+                        while self.commitIndex > self.lastApplied:
+                                print("CommitIndex > LastApplied for " + self.id)
+                                self.lastApplied += 1
+                                msg = self.log[self.lastApplied]
+
+                                key = msg['key']
+                                val = msg['value']
+
+                                self.data[key] = val
+
+                                self.send_client_message(msg['src'], 'ok', msg['MID'])
+
+                        # Send heartbeats
 			if clock > self.timeStamp + self.heartbeatTimeout:
                                 # print("Sending heartbeat from " + self.id)
                                 self.send_heartbeats()
