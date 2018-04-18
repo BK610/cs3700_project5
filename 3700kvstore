@@ -78,8 +78,17 @@ class Replica:
                 '''
 		if msg['type'] in ['get', 'put']:
                         self.handle_get_put(msg)
+			return
 
-		elif (msg['type'] == 'voteRequest'):
+		sender_term = msg['term']
+		if (sender_term > self.term):
+			print("SENDER HAS BETTER TERM THAN ME")
+			self.term = sender_term
+			self.state = State.FOLLOWER
+			self.votedFor = None
+			self.leader = 'FFFF'
+
+		if (msg['type'] == 'voteRequest'):
                         self.handle_vote_request(msg)
 
 		elif (msg['type'] == 'vote'):
@@ -121,6 +130,7 @@ class Replica:
 
                                 self.send_client_message(msg['src'], 'ok', msg['MID'])
 
+
                 # Don't know who the leader is, fail
                 elif (self.leader == 'FFFF'):
                         self.send_client_message(msg['src'], 'fail', msg['MID'])
@@ -138,10 +148,24 @@ class Replica:
                 '''
                 potential_candidate = msg['src']
                 candidate_term = msg['term']
+		candidate_last_log_index = msg['lastLogIndex']
+
 
                 print("I am " + self.id + " and I recieved a vote request from " + potential_candidate)
 
-                if candidate_term > self.term:
+		if candidate_term < self.term:
+			vote_msg = {'src': self.id,
+			   'dst': potential_candidate,
+			   'leader': self.leader,
+			   'type': 'vote',
+			   'term': self.term,
+			   'voteGranted': False}
+			self.sock.send(json.dumps(vote_msg))
+			return
+		
+
+
+                if ((self.votedFor == None or self.votedFor == potential_candidate) and candidate_last_log_index >= len(self.log) - 1):
                         self.state = State.FOLLOWER
                         self.votedFor = potential_candidate
                         vote_msg = {'src': self.id,
@@ -157,6 +181,7 @@ class Replica:
                         self.reset_clock()
                         #self.timeStamp = time.time()
                         #self.electionTimeout = rand_election_timeout()
+				
 
         def handle_vote(self, msg):
                 '''
@@ -164,19 +189,23 @@ class Replica:
                 Arguments:
                 msg - String, received vote message
                 '''
-                print("I am " + self.id + " and " + msg['src'] + " voted for me!")
-                self.voteCount += 1
 
-                total_replicas = len(self.replica_ids) + 1
+		if (msg['voteGranted']):
+                	print("I am " + self.id + " and " + msg['src'] + " voted for me!")
+             		self.voteCount += 1
 
-                if (self.voteCount > total_replicas / 2 + 1):
-                        print(self.id + "wins!")
-                        self.state = State.LEADER
-                        self.voteCount = -1
-                        self.votedFor = None
-                        self.leader = self.id
-                        self.send_heartbeats()
-                        self.timeStamp = time.time()
+                	total_replicas = len(self.replica_ids) + 1
+
+                	if (self.voteCount > total_replicas / 2 + 1):
+                        	print(self.id + "wins!")
+                        	self.state = State.LEADER
+                        	self.voteCount = -1
+                        	self.votedFor = None
+                        	self.leader = self.id
+                        	self.send_heartbeats()
+                        	self.timeStamp = time.time()
+		else:
+			print("refused vote refusal")
 
         def handle_heartbeat(self, msg):
                 '''
@@ -231,7 +260,7 @@ class Replica:
                 if (leaderTerm < self.term
                         or entryAtPrevLogIndex['term'] != leaderEntry['term']):
                         # Send failure
-                        response = {'src': self.id, 'dst': leaderID, 'leader': self.leader, 'type': "heartbeatResponse", 'term': self.term, 'success': 'False'}
+                        response = {'src': self.id, 'dst': leaderID, 'leader': self.leader, 'type': "heartbeatResponse", 'term': self.term, 'success': 'False', 'log_length': len(self.log)}
                         self.sock.send(json.dumps(response))
 
                         self.reset_clock()
@@ -240,8 +269,9 @@ class Replica:
                 leaderIndex = 1
 
                 # Step 3
-                for entry_index in range(prevLogIndex + 1, len(self.log) - 1):
-                        entryAtPrevLogIndex = self.log[entry_index]
+                for entry_index in range(prevLogIndex + 1, min(prevLogIndex + len(leaderEntries), len(self.log) - 1)):
+                        
+			entryAtPrevLogIndex = self.log[entry_index]
                         leaderEntry = leaderEntries[leaderIndex]
 
                         if (['term'] != leaderEntry['term']
@@ -308,7 +338,7 @@ class Replica:
                 for repID in self.replica_ids:
                         prevLogIndex = self.nextIndex[repID] - 1
                         prevLogTerm = -1 if prevLogIndex == -1 else self.log[prevLogIndex]['term']
-
+			leaderEntryEnd = min(prevLogIndex + 20, len(self.log))
                         msg = {'src': self.id,
                             'dst': repID,
                             'leader': self.id,
@@ -316,7 +346,7 @@ class Replica:
                             'term': self.term,
                             # TODO: What are the actual values for these?
                             'leaderCommit': self.commitIndex,
-                            'entries': self.log[prevLogIndex:],
+                            'entries': self.log[prevLogIndex:leaderEntryEnd],
                             'prevLogIndex': prevLogIndex,
                             'prevLogTerm': prevLogTerm}
                         self.sock.send(json.dumps(msg))
@@ -330,7 +360,7 @@ class Replica:
                             'type': 'voteRequest',
                             'term': self.term,
                             #TODO: What are the actual values for these?
-                            'lastLogIndex': 0,
+                            'lastLogIndex': len(self.log) - 1,
                             'lastLogTerm': 0}
                         self.sock.send(json.dumps(msg))
 
